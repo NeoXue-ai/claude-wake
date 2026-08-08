@@ -74,6 +74,15 @@ Edit `~/.claude/settings.json` and add:
 }
 ```
 
+## Sleep behaviour
+
+Two things keep scheduled tasks alive across sleep:
+
+- While `cw` is running it spawns `caffeinate -i -m` bound to its own PID, so the Mac won't fall asleep on idle.
+- The scheduler matches an **interval** rather than an exact minute. If the machine was suspended anyway (lid closed, forced sleep), any task whose time fell inside the sleep window fires as soon as the machine wakes.
+
+Closing the terminal stops both the scheduler and `caffeinate`.
+
 ## Requirements
 
 - macOS (depends on AppleScript)

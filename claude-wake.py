@@ -148,6 +148,7 @@ end tell
 def scheduler_loop(tasks):
     sent_today = {}
     last_mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else 0
+    last_check = datetime.now()
     while True:
         try:
             if CONFIG_PATH.exists():
@@ -159,21 +160,31 @@ def scheduler_loop(tasks):
                     log_event(f"config reloaded ({len(tasks)} tasks)")
 
             now = datetime.now()
-            key = now.strftime("%H:%M")
+            gap = (now - last_check).total_seconds()
+            if gap > 120:
+                log_event(f"检测到休眠/挂起 {int(gap//60)} 分钟,补检查错过的任务")
+
             day = now.strftime("%Y-%m-%d")
             for i, task in enumerate(tasks):
-                if (
-                    task.get("enabled", True)
-                    and task["time"] == key
-                    and sent_today.get(i) != day
-                ):
-                    log_event(f"触发 #{i+1} → {task.get('target','*')}: {task['message'][:30]}")
-                    try:
-                        send_to_terminal(task.get("target", "*"), task["message"])
-                        sent_today[i] = day
-                        log_event(f"  发送成功")
-                    except Exception as e:
-                        log_event(f"  失败: {e}")
+                if not task.get("enabled", True) or sent_today.get(i) == day:
+                    continue
+                try:
+                    h, m = map(int, task["time"].split(":"))
+                except (ValueError, KeyError):
+                    continue
+                sched = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                # 休眠期间错过的也算命中:上次检查点 < 计划时间 <= 现在
+                if not (last_check <= sched <= now):
+                    continue
+                log_event(f"触发 #{i+1} → {task.get('target','*')}: {task['message'][:30]}")
+                try:
+                    send_to_terminal(task.get("target", "*"), task["message"])
+                    sent_today[i] = day
+                    log_event(f"  发送成功")
+                except Exception as e:
+                    log_event(f"  失败: {e}")
+
+            last_check = now
         except Exception as e:
             log_event(f"调度异常: {e}")
         time.sleep(20)
@@ -448,10 +459,26 @@ def render(tasks, selected=0):
     print()
 
 
+# ─── keep the Mac awake while running ────────────────────────────
+def keep_awake():
+    """Prevent idle sleep for as long as this process lives."""
+    try:
+        subprocess.Popen(
+            ["caffeinate", "-i", "-m", "-w", str(os.getpid())],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as e:
+        log_event(f"caffeinate 启动失败: {e}")
+        return False
+
+
 # ─── main ─────────────────────────────────────────────────────────
 def main():
     tasks = load_tasks()
-    log_event("scheduler started")
+    awake = keep_awake()
+    log_event("scheduler started" + ("  (caffeinate on)" if awake else ""))
     threading.Thread(target=scheduler_loop, args=(tasks,), daemon=True).start()
 
     def run(name):
